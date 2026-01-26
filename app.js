@@ -32,6 +32,10 @@ const options = {
 };
 const network = new vis.Network(container, data, options);
 
+// --- EVENT LISTENERS ---
+document.getElementById('btnStart').addEventListener('click', startDiscovery);
+document.getElementById('btnExport').addEventListener('click', exportData);
+
 // --- STATE ---
 const visitedNodes = new Set();
 const nodeQueue = [];
