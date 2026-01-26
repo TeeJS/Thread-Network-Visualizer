@@ -225,6 +225,8 @@ async function processQueue() {
             // result data usually looks like { data: [ { attributes: ... } ] } or { data: { attributes: ... } }
             const reportData = Array.isArray(reportJson.data) ? reportJson.data[0] : reportJson.data;
             updateGraph(reportData.attributes);
+            log(`Scanned ${currentRloc}`);
+        } else {
             log(`Failed to get data for ${currentRloc}`);
         }
 
