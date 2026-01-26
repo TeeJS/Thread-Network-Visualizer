@@ -1,0 +1,23 @@
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background: #f0f2f5; height: 100vh; display: flex; flex-direction: column; }
+header { background: #343a40; color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+h1 { margin: 0; font-size: 1.2rem; }
+
+#controls { display: flex; gap: 10px; }
+input[type="text"] { padding: 8px; border-radius: 4px; border: none; width: 250px; }
+button { padding: 8px 16px; border-radius: 4px; border: none; cursor: pointer; font-weight: bold; }
+button#btnStart { background-color: #28a745; color: white; }
+button#btnStart:disabled { background-color: #6c757d; cursor: not-allowed; }
+
+#main { display: flex; flex: 1; overflow: hidden; }
+#network-container { flex: 3; background: #ffffff; position: relative; border-right: 1px solid #ddd; }
+#sidebar { flex: 1; max-width: 400px; background: #f8f9fa; display: flex; flex-direction: column; padding: 10px; box-sizing: border-box; }
+
+#log-window { flex: 1; background: #212529; color: #00ff00; font-family: monospace; font-size: 0.85rem; padding: 10px; overflow-y: auto; border-radius: 4px; margin-bottom: 10px; }
+.log-entry { margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+.log-time { color: #888; margin-right: 5px; }
+
+#details-panel { height: 150px; background: white; padding: 10px; border-radius: 4px; border: 1px solid #ddd; font-size: 0.9rem; overflow-y: auto; }
+
+/* Legend */
+.legend { position: absolute; bottom: 10px; left: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 5px; font-size: 12px; pointer-events: none; border: 1px solid #ccc; }
+.dot { height: 10px; width: 10px; display: inline-block; border-radius: 50%; margin-right: 5px; }
