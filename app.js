@@ -26,9 +26,9 @@ const options = {
     physics: {
         stabilization: false,
         barnesHut: { 
-            gravitationalConstant: -5000, 
-            springConstant: 0.01, 
-            springLength: 500,
+            gravitationalConstant: -10000, 
+            springConstant: 0.04, 
+            springLength: 100,
             damping: 0.09
         }
     }
@@ -320,7 +320,7 @@ async function pollAction(actionId) {
     return null; // Timeout
 }
 
-function addNodeToGraph(rloc, data, role) {
+function addNodeToGraph(rloc, data, role, startPos = null) {
     if (!rloc) return;
     const rawData = data || {};
     const ext = rawData.extAddress;
@@ -350,14 +350,21 @@ function addNodeToGraph(rloc, data, role) {
         let title = `Ext: ${ext || '??'}\nRLOC: ${rloc}\nRole: ${role}`;
         if (rawData.ip6) title += `\nIPv6: ${rawData.ip6.join('\n      ')}`;
 
-        nodes.add({
+        const nodeOpts = {
             id: rloc,
             label: label,
             title: title,
             group: role,
             color: color,
             rawData: rawData
-        });
+        };
+
+        if (startPos) {
+            nodeOpts.x = startPos.x;
+            nodeOpts.y = startPos.y;
+        }
+
+        nodes.add(nodeOpts);
     } else {
         // Update existing node if we now have more info (e.g. valid Ext Address)
         const node = nodes.get(rloc);
@@ -640,6 +647,12 @@ function updateGraph(data) {
 
     // Process Neighbors
     if (data.routerNeighbors) {
+        // Pre-calculate positions for purely new nodes to distribute them in a circle
+        const newNeighbors = data.routerNeighbors.filter(n => !nodes.get(n.rloc16));
+        const parentPositions = network.getPositions([rloc]);
+        const parentPos = parentPositions[rloc] || {x: 0, y: 0};
+        const distributionRadius = 250; 
+
         data.routerNeighbors.forEach(n => {
             const neighborRloc = n.rloc16;
             const neighborExt = n.extAddress;
@@ -655,9 +668,20 @@ function updateGraph(data) {
             
             // Ensure neighbor node exists (placeholder) so edge can connect
             if (!nodes.get(neighborRloc)) {
+                // Calculate start position if this is a new node
+                let startPos = null;
+                const newIndex = newNeighbors.indexOf(n);
+                if (newIndex !== -1) {
+                    const angle = (newIndex / newNeighbors.length) * 2 * Math.PI;
+                    startPos = {
+                        x: parentPos.x + distributionRadius * Math.cos(angle),
+                        y: parentPos.y + distributionRadius * Math.sin(angle)
+                    };
+                }
+
                 // Use helper to ensure naming and coloring logic is applied immediately
                 // even before we probe the node fully.
-                addNodeToGraph(neighborRloc, { extAddress: neighborExt }, 'Router');
+                addNodeToGraph(neighborRloc, { extAddress: neighborExt }, 'Router', startPos);
             }
 
             // Create Edge ID (sorted to prevent duplicates A->B vs B->A)
@@ -729,6 +753,15 @@ function updateGraph(data) {
     // Note: Children are often sleepy end devices (SEDs) and we don't crawl them directly
     // because they don't have neighbors to share. We just display them attached to parent.
     if (data.childTable) {
+        // Pre-calculate positions for NEW children to distribute them in a separate circle
+        const newChildren = data.childTable.filter(child => {
+             const childId = `${rloc}_child_${child.childId}`;
+             return !nodes.get(childId);
+        });
+        const parentPositions = network.getPositions([rloc]);
+        const parentPos = parentPositions[rloc] || {x: 0, y: 0};
+        const childRadius = 125; 
+
         data.childTable.forEach((child, index) => {
             // Calculate Child RLOC16: Parent RLOC + Child ID
             // Note: This is an approximation. Child ID is usually the last bits.
@@ -737,6 +770,17 @@ function updateGraph(data) {
             
             // Add Child Node
             if (!nodes.get(childId)) {
+                
+                let startX = undefined;
+                let startY = undefined;
+                const newIndex = newChildren.indexOf(child);
+                if (newIndex !== -1) {
+                     // Interleave or offset angle to avoid direct overlap with router neighbors
+                     const angle = (newIndex / newChildren.length) * 2 * Math.PI + (Math.PI / 3); 
+                     startX = parentPos.x + childRadius * Math.cos(angle);
+                     startY = parentPos.y + childRadius * Math.sin(angle);
+                }
+
                 // Try to guess ExtAddress or matching name if we have a way (we don't easily)
                 // Unless we looked up the child table elsewhere. 
                 // Usually Diagnostics 'childTable' only gives: { childId, timeout, mode, linkQuality }
@@ -745,7 +789,7 @@ function updateGraph(data) {
                 const isSleepy = child.mode && !child.mode.rxOnWhenIdle;
                 const label = `Child ${child.childId}\n${isSleepy ? '(Sleepy)' : ''}`;
                 
-                nodes.add({
+                const nodeOpts = {
                     id: childId,
                     label: label,
                     title: `Child ID: ${child.childId}\nTimeout: ${child.timeout}\nSleepy: ${isSleepy}`,
@@ -754,7 +798,14 @@ function updateGraph(data) {
                     size: END_DEVICE_NODE_SIZE,
                     color: '#6c757d', 
                     rawData: child
-                });
+                };
+
+                if (startX !== undefined) {
+                    nodeOpts.x = startX;
+                    nodeOpts.y = startY;
+                }
+                
+                nodes.add(nodeOpts);
                 
                 // Add Edge to Parent
                 edges.add({
