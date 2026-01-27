@@ -68,9 +68,19 @@ network.on("click", function (params) {
     if (params.nodes.length > 0) {
         const nodeId = params.nodes[0];
         const node = nodes.get(nodeId);
+        
+        let ip6Html = '';
+        if (node.rawData && node.rawData.ip6 && Array.isArray(node.rawData.ip6)) {
+            ip6Html = '<strong>IPv6 Addresses:</strong><br><div style="font-size:10px; margin-left:10px;">' + 
+                      node.rawData.ip6.join('<br>') + '</div><br>';
+        }
+
+        const extAddr = (node.rawData && node.rawData.extAddress) ? node.rawData.extAddress : (node.title ? node.title.split('\n')[0] : 'Unknown');
+
         const detailHtml = `
             <strong>RLOC16:</strong> ${node.id}<br>
-            <strong>Extended Address:</strong> <br>${node.title || 'Unknown'}<br>
+            <strong>Extended Address:</strong> <br>${extAddr}<br>
+            ${ip6Html}
             <strong>Role:</strong> ${node.group}<br>
             <strong>Raw Info:</strong> <pre style="font-size:10px">${JSON.stringify(node.rawData, null, 2)}</pre>
         `;
@@ -187,7 +197,7 @@ async function processQueue() {
                 type: "getNetworkDiagnosticTask",
                 attributes: {
                     destination: currentExt || currentRloc,
-                    types: ["routerNeighbors", "childTable", "rloc16", "extAddress"],
+                    types: ["routerNeighbors", "childTable", "rloc16", "extAddress", "ipv6Addresses"],
                     timeout: 5
                 }
             }]
@@ -615,6 +625,13 @@ function updateLinkVisibility() {
 function updateGraph(data) {
     const rloc = data.rloc16;
     
+    // Normalize IPv6 list for display
+    if (data.ipv6Addresses) {
+        data.ip6 = data.ipv6Addresses;
+    } else if (data.ip6AddressList) {
+        data.ip6 = data.ip6AddressList;
+    }
+
     addNodeToGraph(rloc, data, 'Router');
 
     // Process Neighbors
