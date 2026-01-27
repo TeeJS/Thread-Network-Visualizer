@@ -3,6 +3,9 @@
 let API_BASE = ""; 
 
 // --- VISUALIZATION SETUP ---
+const ROUTER_NODE_SIZE = 15;
+const END_DEVICE_NODE_SIZE = 15;
+
 const nodes = new vis.DataSet([]);
 const edges = new vis.DataSet([]);
 const container = document.getElementById('mynetwork');
@@ -10,7 +13,7 @@ const data = { nodes: nodes, edges: edges };
 const options = {
     nodes: {
         shape: 'hexagon',
-        size: 25,
+        size: ROUTER_NODE_SIZE,
         font: { size: 14, face: 'monospace', background: 'transparent' },
         borderWidth: 2,
         shadow: true
@@ -24,8 +27,8 @@ const options = {
         stabilization: false,
         barnesHut: { 
             gravitationalConstant: -5000, 
-            springConstant: 0.05, 
-            springLength: 200,
+            springConstant: 0.01, 
+            springLength: 500,
             damping: 0.09
         }
     }
@@ -520,7 +523,7 @@ function parseCliInput() {
                             group: 'EndDevice',
                             color: '#6c757d',
                             shape: 'dot',
-                            size: 10
+                            size: END_DEVICE_NODE_SIZE
                         });
                      }
                      
@@ -535,7 +538,7 @@ function parseCliInput() {
                             dashes: true,
                             color: '#aaa',
                             width: 1,
-                            length: 50
+                            length: 125 // Scaled 2.5x (was 50)
                         });
                      }
                  });
@@ -561,8 +564,9 @@ function parseCliInput() {
                 else if (e.lqi === 2) color = '#ffc107';
                 
                 // Simple Physics for Imported Data (no RSSI/LinkMargin available in this summary usually)
-                // LQI 3 -> Short, LQI 1 -> Long
-                const length = e.lqi === 3 ? 150 : (e.lqi === 2 ? 300 : 500);
+                // LQI 3 -> Short (375), LQI 1 -> Long (1250)
+                // Scaled by 2.5x ("150% longer")
+                const length = e.lqi === 3 ? 375 : (e.lqi === 2 ? 750 : 1250);
 
                 edges.add({
                     id: edgeId,
@@ -681,9 +685,10 @@ function updateGraph(data) {
                 // Calculate Length: Signal decaying with square of distance 
                 // LinkMargin 60 -> Dist ~180
                 // LinkMargin 10 -> Dist ~450
-                const K = 2000000;
+                // Scaled K for "150% longer" (2.5x base). 2000000 * 6.25 = 12500000
+                const K = 12500000;
                 let length = Math.sqrt(K / Math.max(1, signalVal));
-                length = Math.min(800, Math.max(150, length));
+                length = Math.min(2000, Math.max(375, length));
 
                 // Color still based on standard LQI for recognizability
                 if(lqi === 3) color = '#28a745'; 
@@ -746,7 +751,7 @@ function updateGraph(data) {
                     title: `Child ID: ${child.childId}\nTimeout: ${child.timeout}\nSleepy: ${isSleepy}`,
                     group: 'EndDevice',
                     shape: isSleepy ? 'dot' : 'diamond', 
-                    size: 10,
+                    size: END_DEVICE_NODE_SIZE,
                     color: '#6c757d', 
                     rawData: child
                 });
@@ -756,7 +761,7 @@ function updateGraph(data) {
                     from: rloc,
                     to: childId,
                     dashes: true, // Dashed line for child-parent
-                    length: 50,
+                    length: 125, // Scaled 2.5x
                     color: { color: '#aaa' }
                 });
             }
