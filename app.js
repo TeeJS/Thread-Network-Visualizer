@@ -35,6 +35,12 @@ const network = new vis.Network(container, data, options);
 // --- EVENT LISTENERS ---
 document.getElementById('btnStart').addEventListener('click', startDiscovery);
 document.getElementById('btnExport').addEventListener('click', exportData);
+// Import Logic
+const modal = document.getElementById('importModal');
+document.getElementById('btnImport').addEventListener('click', () => modal.style.display = 'flex');
+document.getElementById('btnCancelImport').addEventListener('click', () => modal.style.display = 'none');
+document.getElementById('btnParseImport').addEventListener('click', parseCliInput);
+
 // Add listener for Link Filter
 document.getElementById('linkFilter').addEventListener('change', updateLinkVisibility);
 
@@ -324,11 +330,17 @@ function addNodeToGraph(rloc, data, role) {
                 role = `Leader (Router ${rId})`;
             }
         }
+        
+        // Use supplied role color if specific role string matched
+        if (role.includes('Leader')) color = '#800080';
+
+        let title = `Ext: ${ext || '??'}\nRLOC: ${rloc}\nRole: ${role}`;
+        if (rawData.ip6) title += `\nIPv6: ${rawData.ip6.join('\n      ')}`;
 
         nodes.add({
             id: rloc,
             label: label,
-            title: `Ext: ${ext || '??'}\nRLOC: ${rloc}\nRole: ${role}`,
+            title: title,
             group: role,
             color: color,
             rawData: rawData
@@ -352,20 +364,212 @@ function addNodeToGraph(rloc, data, role) {
         
         const currentRawData = node.rawData || {};
         // If we didn't have extAddress before but do now, update
+        let needsUpdate = false;
+        let updates = { id: rloc };
+
         if (!currentRawData.extAddress && rawData.extAddress) {
-                const newExt = rawData.extAddress;
-                let newLabel = rloc;
-                if (newExt && deviceNames[newExt]) {
-                newLabel = `${deviceNames[newExt]}\n(${rloc})`;
-                }
-                nodes.update({
-                id: rloc,
-                label: newLabel,
-                title: `Ext: ${newExt}\nRLOC: ${rloc}`,
-                rawData: { ...currentRawData, extAddress: newExt }
-                });
+            const newExt = rawData.extAddress;
+            let newLabel = rloc;
+            if (newExt && deviceNames[newExt]) {
+               newLabel = `${deviceNames[newExt]}\n(${rloc})`;
+            }
+            updates.label = newLabel;
+            updates.title = (node.title || '').replace('Ext: ??', `Ext: ${newExt}`); // Simple replace
+            updates.rawData = { ...currentRawData, extAddress: newExt };
+            needsUpdate = true;
         }
+        
+        // Update IPv6 if provided
+        if (rawData.ip6 && (!currentRawData.ip6 || currentRawData.ip6.length === 0)) {
+             updates.rawData = updates.rawData || { ...currentRawData };
+             updates.rawData.ip6 = rawData.ip6;
+             updates.title = (updates.title || node.title) + `\nIPv6: ${rawData.ip6.join('\n      ')}`;
+             needsUpdate = true;
+        }
+
+        if (needsUpdate) nodes.update(updates);
     }
+}
+
+// --- CLI IMPORT PARSER ---
+function parseCliInput() {
+    const text = document.getElementById('cliInput').value;
+    if (!text) return;
+
+    // Reset Graph
+    nodes.clear();
+    edges.clear();
+    visitedNodes.clear();
+    nodeQueue.length = 0;
+    currentLeaderId = null;
+
+    // Helper to add edges
+    const pendingEdges = []; // {fromId, toId, lqi} - using Router IDs, resolve later
+
+    // 1. Split into blocks by "id:"
+    // Blocks look like: "id:01 rloc16:0x0400 ..."
+    // We split by newline, then look for lines starting with "id:" or indented sections
+    const lines = text.split('\n');
+    let currentNode = null;
+    
+    // Quick Router ID to RLOC mapping for second pass
+    const idToRloc = {}; 
+
+    lines.forEach(line => {
+        line = line.trim();
+        if (line.startsWith('id:')) {
+            // Start of a node
+            // Format: id:01 rloc16:0x0400 ext-addr:b2c9a2836317bc63 ver:5 - me - br
+            const parts = line.split(/\s+/);
+            const idPart = parts.find(p => p.startsWith('id:'));
+            const rlocPart = parts.find(p => p.startsWith('rloc16:'));
+            const extPart = parts.find(p => p.startsWith('ext-addr:'));
+            const isLeader = line.toLowerCase().includes('leader');
+            const isBr = line.toLowerCase().includes('br');
+
+            if (rlocPart) {
+                const rloc = rlocPart.split(':')[1];
+                const id = idPart ? parseInt(idPart.split(':')[1], 10) : null;
+                const ext = extPart ? extPart.split(':')[1] : null;
+
+                currentNode = {
+                    rloc: rloc,
+                    ext: ext,
+                    id: id,
+                    role: isLeader ? `Leader (Router ${id})` : (isBr ? 'Border Router' : 'Router'),
+                    ip6: [],
+                    neighbors: [], // {id, lqi}
+                    children: []
+                };
+                
+                if (id !== null) {
+                    idToRloc[id] = rloc;
+                    if (isLeader) currentLeaderId = id;
+                }
+                
+                // Add to graph immediately
+                addNodeToGraph(rloc, { extAddress: ext }, currentNode.role);
+            }
+        } else if (currentNode && line.includes('-links:{')) {
+            // Neighbor Links
+            // Format: 3-links:{ 14 17 ... }
+            // "3-links" means LQI 3
+            const linkMatch = line.match(/(\d)-links:\{\s*([\d\s]+)\s*\}/);
+            if (linkMatch) {
+                const lqi = parseInt(linkMatch[1]);
+                const neighborIds = linkMatch[2].trim().split(/\s+/).map(s => parseInt(s, 10));
+                neighborIds.forEach(nId => {
+                    currentNode.neighbors.push({ id: nId, lqi: lqi });
+                });
+            }
+        } else if (currentNode && line.startsWith('rloc16:') && line.includes('lq:')) {
+            // Child line (indented usually, but we trimmed)
+            // Format: rloc16:0x4409 lq:3, mode:-
+            const rlocMatch = line.match(/rloc16:(0x[0-9a-fA-F]+)/);
+            const lqiMatch = line.match(/lq:(\d)/);
+            if (rlocMatch) {
+                currentNode.children.push({
+                    rloc: rlocMatch[1],
+                    lqi: lqiMatch ? parseInt(lqiMatch[1]) : 0
+                });
+            }
+        } else if (currentNode && line.includes(':') && line.length > 20 && !line.includes('ip6-addrs')) {
+            // Likely an IP address (heuristic)
+            if (line.includes('fd') || line.includes('fe80')) {
+                currentNode.ip6.push(line);
+            }
+        }
+        
+        // Update stored node data with gathered arrays
+        if (currentNode) {
+             // We update the node in the dataset with the IP list continuously or at end of block
+             // Doing it here inefficiently but safely
+             nodes.update({
+                 id: currentNode.rloc,
+                 rawData: { extAddress: currentNode.ext, ip6: currentNode.ip6 } 
+             });
+             
+             // Queue edges
+             if (currentNode.neighbors.length > 0) {
+                 currentNode.neighbors.forEach(n => {
+                     // Check if already queued? No, just store for post-processing
+                     // We need to resolve IDs to RLOCs
+                     pendingEdges.push({ from: currentNode.rloc, toId: n.id, lqi: n.lqi });
+                 });
+                 currentNode.neighbors = []; // Clear to avoid re-adding
+             }
+             
+             if (currentNode.children.length > 0) {
+                 currentNode.children.forEach(c => {
+                     // Add child node
+                     const childRloc = c.rloc;
+                     if(!nodes.get(childRloc)) {
+                        nodes.add({
+                            id: childRloc,
+                            label: 'Child\n' + childRloc,
+                            group: 'EndDevice',
+                            color: '#6c757d',
+                            shape: 'dot',
+                            size: 10
+                        });
+                     }
+                     
+                     // Add edge immediately
+                     const edgeId = [currentNode.rloc, childRloc].sort().join('-');
+                     if (!edges.get(edgeId)) {
+                        edges.add({
+                            id: edgeId,
+                            from: currentNode.rloc,
+                            to: childRloc,
+                            lqi: c.lqi,
+                            dashes: true,
+                            color: '#aaa',
+                            width: 1,
+                            length: 50
+                        });
+                     }
+                 });
+                 currentNode.children = [];
+             }
+        }
+    });
+    
+    // Pass 2: Create Edges from Pending
+    // We only add edges where we know the destination RLOC
+    const processedEdgeIds = new Set();
+    
+    pendingEdges.forEach(e => {
+        const toRloc = idToRloc[e.toId];
+        if (toRloc) {
+            const edgeId = [e.from, toRloc].sort().join('-');
+            if (!processedEdgeIds.has(edgeId)) {
+                processedEdgeIds.add(edgeId);
+
+                // Calculate color/width based on LQI
+                let color = '#dc3545'; // 1
+                if (e.lqi === 3) color = '#28a745';
+                else if (e.lqi === 2) color = '#ffc107';
+                
+                // Simple Physics for Imported Data (no RSSI/LinkMargin available in this summary usually)
+                // LQI 3 -> Short, LQI 1 -> Long
+                const length = e.lqi === 3 ? 150 : (e.lqi === 2 ? 300 : 500);
+
+                edges.add({
+                    id: edgeId,
+                    from: e.from,
+                    to: toRloc,
+                    label: `LQI:${e.lqi}`,
+                    lqi: e.lqi,
+                    color: { color: color, highlight: color },
+                    width: e.lqi === 3 ? 3 : 1,
+                    length: length
+                });
+            }
+        }
+    });
+
+    log("Imported topology from CLI output.");
+    document.getElementById('importModal').style.display = 'none';
 }
 
 function exportData() {

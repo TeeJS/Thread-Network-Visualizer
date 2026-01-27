@@ -12,6 +12,7 @@
 <header>
     <h1>Thread Mesh Visualizer</h1>
     <div id="controls">
+        <button id="btnImport" style="background-color: #6610f2; color: white;">Import CLI</button>
         <input type="text" id="apiUrl" placeholder="OTBR URL (e.g. http://192.168.1.50)" value="">
         <select id="linkFilter" style="margin-left: 10px; padding: 8px;">
             <option value="0">Show All Links</option>
@@ -37,6 +38,18 @@
         <div id="log-window"></div>
         <strong>Node Details</strong>
         <div id="details-panel">Click a node to see details...</div>
+    </div>
+</div>
+
+<div id="importModal">
+    <div id="importContent">
+        <h3>Import "ot-ctl meshdiag topology" Output</h3>
+        <p>Run <code>ot-ctl meshdiag topology children ip6-addrs</code> on your Border Router and paste the output below:</p>
+        <textarea id="cliInput" placeholder="Paste output here...&#10;id:01 rloc16:0x0400 ..."></textarea>
+        <div class="modal-footer">
+            <button id="btnCancelImport" style="background-color: #6c757d; color: white;">Cancel</button>
+            <button id="btnParseImport" style="background-color: #28a745; color: white;">Visualize!</button>
+        </div>
     </div>
 </div>
 
