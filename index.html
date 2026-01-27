@@ -13,6 +13,11 @@
     <h1>Thread Mesh Visualizer</h1>
     <div id="controls">
         <input type="text" id="apiUrl" placeholder="OTBR URL (e.g. http://192.168.1.50)" value="">
+        <select id="linkFilter" style="margin-left: 10px; padding: 8px;">
+            <option value="0">Show All Links</option>
+            <option value="2">Medium & Strong Only (LQI 2+)</option>
+            <option value="3">Strong Only (LQI 3)</option>
+        </select>
         <button id="btnStart">Start Crawl</button>
         <button id="btnExport" style="background-color: #17a2b8; color: white;">Export JSON</button>
     </div>

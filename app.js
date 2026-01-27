@@ -35,6 +35,8 @@ const network = new vis.Network(container, data, options);
 // --- EVENT LISTENERS ---
 document.getElementById('btnStart').addEventListener('click', startDiscovery);
 document.getElementById('btnExport').addEventListener('click', exportData);
+// Add listener for Link Filter
+document.getElementById('linkFilter').addEventListener('change', updateLinkVisibility);
 
 // --- STATE ---
 const visitedNodes = new Set();
@@ -258,12 +260,37 @@ async function pollAction(actionId) {
         const status = actionData.attributes.status;
         
         // Debug Log Status
-        // console.log(`Polling ${actionId}: ${status}`, actionData);
+        console.log(`Polling ${actionId}: ${status}`, actionData);
 
         if (status === 'completed') {
-            if (actionData.relationships && actionData.relationships.result && actionData.relationships.result.data) {
-                return actionData.relationships.result.data.id;
+            // FIX: Robustly find the result ID.
+            
+            // 1. Check standard 'result' relationship
+            const rels = actionData.relationships;
+            if (rels) {
+                if (rels.result && rels.result.data) return rels.result.data.id;
+                
+                // 2. Scan ALL relationships for something that looks like a diagnostic result
+                for (const key in rels) {
+                    const r = rels[key];
+                    if (r.data && r.data.id && (r.data.type || '').toLowerCase().includes('diagnostic')) {
+                        // console.log(`Found Result ID in relationship: ${key}`);
+                        return r.data.id;
+                    }
+                }
             }
+
+            // 3. Check 'included' array for diagnostic objects
+            if (statusJson.included && Array.isArray(statusJson.included)) {
+                // Find any included item with 'diagnostic' in its type
+                const diag = statusJson.included.find(i => (i.type || '').toLowerCase().includes('diagnostic'));
+                if (diag) {
+                    // console.log(`Found Result ID in included: ${diag.type}`);
+                    return diag.id;
+                }
+            }
+            
+            console.error("Action completed but no Result ID found.", actionData);
             return null;
         }
         if (status === 'failed' || status === 'stopped') {
@@ -354,6 +381,33 @@ function exportData() {
     a.click();
 }
 
+function updateLinkVisibility() {
+    const minLqi = parseInt(document.getElementById('linkFilter').value);
+    const updates = [];
+    const allEdges = edges.get();
+    
+    allEdges.forEach(edge => {
+        // Retrieve LQI. If undefined (e.g. child links), treat as high quality (99) to keep visible.
+        const lqi = edge.lqi !== undefined ? edge.lqi : 99;
+        
+        const shouldHide = lqi < minLqi;
+        
+        // Update check: If visibility OR physics state is wrong, update it.
+        // We disable physics for hidden edges so they don't pull nodes together invisibly.
+        if (edge.hidden !== shouldHide || edge.physics === shouldHide) {
+            updates.push({ 
+                id: edge.id, 
+                hidden: shouldHide,
+                physics: !shouldHide // Physics ON if shown, OFF if hidden
+            });
+        }
+    });
+
+    if (updates.length > 0) {
+        edges.update(updates);
+    }
+}
+
 function updateGraph(data) {
     const rloc = data.rloc16;
     
@@ -415,14 +469,21 @@ function updateGraph(data) {
                 else if(lqi === 2) color = '#ffc107'; 
                 
                 // Main Visible Edge
+                // Check current filter setting
+                const minLqi = parseInt(document.getElementById('linkFilter').value) || 0;
+                const isVisible = lqi >= minLqi;
+
                 edges.add({
                     id: edgeId,
                     from: rloc,
                     to: neighborRloc,
+                    lqi: lqi, // Store LQI for filtering
                     label: `LQI:${lqi}\n(${signalVal}dB)`,
                     color: { color: color, highlight: color },
                     width: lqi === 3 ? 3 : 1,
-                    length: length
+                    length: length,
+                    hidden: !isVisible, 
+                    physics: isVisible // Only participate in physics if visible
                 });
             }
 
