@@ -2,7 +2,7 @@
 
 A web-based tool to visualize OpenThread network topology in real-time. It communicates with an OpenThread Border Router (OTBR) to crawl the network, map connections between routers and end devices, and display link quality using a physics-based graph layout.
 
-![Thread Mesh Visualization](https://github.com/openthread/ot-br-posix/raw/main/src/web/web-service/web/images/openthread_logo.png)
+![Thread Mesh Visualization](https://openthread.io/static/images/ot-logo-narrow.png)
 
 ## Features
 
