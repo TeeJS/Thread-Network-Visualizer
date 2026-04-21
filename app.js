@@ -378,23 +378,53 @@ function applyMatterNames(matterDevices) {
             (matterChildrenByParent[parentKey] ||= []).push(m);
         });
 
-    Object.entries(otbrChildrenByParent).forEach(([parent, childIds]) => {
-        const candidates = matterChildrenByParent[parent] || [];
-        if (!candidates.length) return;
-        if (candidates.length === childIds.length) {
-            // Unambiguous 1:1 (still arbitrary ordering, but best we can do).
-            childIds.forEach((id, i) => {
-                deviceNames[id] = candidates[i].name;
-                matches++;
-            });
-        } else {
-            // Counts differ - fall back to joined candidate names on every child
-            // under this parent, so user at least sees plausible names.
-            const joined = [...new Set(candidates.map(c => c.name))].join(' / ');
-            childIds.forEach(id => {
-                deviceNames[id] = joined;
-                matches++;
-            });
+    // Match live OTBR children to Matter candidates; any excess Matter devices
+    // become offline "ghost" nodes so the user sees every commissioned device,
+    // not just the ones that happened to be awake during the crawl.
+    let ghosts = 0;
+    const parents = new Set([...Object.keys(otbrChildrenByParent), ...Object.keys(matterChildrenByParent)]);
+    parents.forEach(parent => {
+        const childIds = otbrChildrenByParent[parent] || [];
+        const candidates = (matterChildrenByParent[parent] || []).slice();
+
+        // 1:1 assign up to min(children, candidates) in order.
+        const paired = Math.min(childIds.length, candidates.length);
+        for (let i = 0; i < paired; i++) {
+            deviceNames[childIds[i]] = candidates[i].name;
+            matches++;
+        }
+
+        // Any Matter candidate without a live OTBR child -> offline ghost.
+        for (let i = paired; i < candidates.length; i++) {
+            const m = candidates[i];
+            const ghostId = `ghost_${parent}_${m.node_id}`;
+            if (!nodes.get(ghostId)) {
+                nodes.add({
+                    id: ghostId,
+                    label: `${m.name}\n(offline)`,
+                    group: 'OfflineEndDevice',
+                    color: { background: '#e5e7eb', border: '#9ca3af' },
+                    shape: 'dot',
+                    size: END_DEVICE_NODE_SIZE,
+                    opacity: 0.65,
+                    font: { color: '#6b7280' },
+                    shapeProperties: { borderDashes: [4, 4] },
+                    rawData: { matterNodeId: m.node_id, offline: true, parentRloc: parent },
+                });
+                const edgeId = `${parent}-${ghostId}`;
+                if (!edges.get(edgeId)) {
+                    edges.add({
+                        id: edgeId,
+                        from: parent,
+                        to: ghostId,
+                        dashes: [2, 6],
+                        color: { color: '#9ca3af', opacity: 0.5 },
+                        width: 1,
+                        length: 150,
+                    });
+                }
+                ghosts++;
+            }
         }
     });
 
@@ -416,7 +446,12 @@ function applyMatterNames(matterDevices) {
         }
     });
 
-    if (matches) log(`Applied ${matches} Matter name(s) via structural match.`);
+    if (matches || ghosts) {
+        const parts = [];
+        if (matches) parts.push(`${matches} Matter name(s) via structural match`);
+        if (ghosts) parts.push(`${ghosts} offline device(s) added from Matter`);
+        log(`Applied ${parts.join('; ')}.`);
+    }
 }
 
 async function processQueue() {
