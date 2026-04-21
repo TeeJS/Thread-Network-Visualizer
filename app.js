@@ -115,41 +115,32 @@ async function startDiscovery() {
 
     log("Starting discovery...");
 
-    // Fetch device names from Matter Server WebSocket
+    // Optionally surface info about Thread devices known to a python-matter-server.
+    // NOTE: we intentionally do NOT auto-populate deviceNames from Matter here.
+    // The Thread Network Diagnostics cluster (id 53) does not expose a node's
+    // own RLOC16 or ExtAddress, and JSON-parsing of uint64 neighbor-table ext
+    // addresses loses precision in JS (last 2 bytes corrupted), so naive
+    // mapping produced wrong labels. Authoritative names live in device_names.json.
     const haUrl = (document.getElementById('haUrl').value || '').replace(/\/$/, '');
     const matterHost = haUrl ? haUrl.replace(/^https?:\/\//, '').split(':')[0] : '192.168.1.25';
     const matterWsUrl = `ws://${matterHost}:5580/ws`;
-    log("Fetching device names from Matter Server...");
     try {
         const matterNodes = await fetchMatterNodes(matterWsUrl);
-        let matched = 0;
-        for (const node of matterNodes) {
-            const attrs = node.attributes || {};
-            const productName = attrs['0/40/3'] || '';
-            const nodeLabel = attrs['0/40/5'] || '';
-            const name = nodeLabel || productName || `Matter Node ${node.node_id}`;
-
-            const rloc16raw = attrs['0/53/3'];
-            if (rloc16raw !== undefined && rloc16raw !== null) {
-                const rlocHex = Number(rloc16raw).toString(16).toUpperCase().padStart(4, '0');
-                deviceNames['0x' + rlocHex] = name;
-                deviceNames['0x' + rlocHex.toLowerCase()] = name;
-                matched++;
-            }
-
-            const neighbors = Array.isArray(attrs['0/53/7']) ? attrs['0/53/7'] : [];
-            neighbors.forEach(n => {
-                if (n && n[0]) {
-                    try {
-                        const extHex = BigInt(Math.round(n[0])).toString(16).toUpperCase().padStart(16, '0');
-                        deviceNames[extHex] = name;
-                    } catch(e) {}
-                }
-            });
+        const threadNodes = matterNodes.filter(n => {
+            const a = n.attributes || {};
+            const hasRoutingRole = a['0/53/1'] !== undefined && a['0/53/1'] !== null
+                && typeof a['0/53/1'] !== 'object';
+            return hasRoutingRole;
+        });
+        const names = threadNodes.map(n => {
+            const a = n.attributes || {};
+            return a['0/40/5'] || a['0/40/3'] || `Matter Node ${n.node_id}`;
+        });
+        if (threadNodes.length) {
+            log(`Matter Server has ${threadNodes.length} Thread device(s): ${names.join(', ')}. Edit device_names.json to label them.`);
         }
-        log(`Loaded ${matched} Thread device name(s) from Matter Server.`);
     } catch (e) {
-        log(`Could not reach Matter Server: ${e.message}`);
+        // Matter Server is optional - continue silently
     }
 
     try {
@@ -267,9 +258,13 @@ async function startDiscovery() {
 
                     if (!nodes.get(childId)) {
                         const isSleepy = child.Mode && !child.Mode.RxOnWhenIdle;
+                        const nameByRloc = deviceNames[childId] || deviceNames[childId.toLowerCase()] || null;
+                        const childLabel = nameByRloc
+                            ? `${nameByRloc}\n(${childId})`
+                            : `Child\n${childId}`;
                         nodes.add({
                             id: childId,
-                            label: `Child\n${childId}`,
+                            label: childLabel,
                             group: 'EndDevice',
                             color: '#6c757d',
                             shape: isSleepy ? 'dot' : 'diamond',
