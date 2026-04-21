@@ -1,6 +1,6 @@
 // --- CONFIGURATION ---
 // If empty, it attempts to use the current page's origin (good for "Host It There" method)
-let API_BASE = "http://192.168.1.25:8082"; 
+let API_BASE = "http://192.168.1.25:8081"; 
 
 // --- VISUALIZATION SETUP ---
 const ROUTER_NODE_SIZE = 15;
@@ -102,7 +102,7 @@ function log(msg) {
 // --- UPDATED DISCOVERY ENGINE (uses /node + /diagnostics directly) ---
 async function startDiscovery() {
     const inputUrl = (document.getElementById('apiUrl').value || '').trim();
-    API_BASE = inputUrl ? inputUrl.replace(/\/$/, "") : "http://192.168.1.25:8082";
+    API_BASE = inputUrl ? inputUrl.replace(/\/$/, "") : "http://192.168.1.25:8081";
 
     if (isScanning) return;
     isScanning = true;
