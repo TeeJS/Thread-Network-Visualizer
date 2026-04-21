@@ -533,18 +533,29 @@ async function fetchHaMatterNames(haWsUrl, token) {
                 clearTimeout(timer);
                 const map = new Map();
                 if (Array.isArray(msg.result)) {
+                    // HA Matter identifier is
+                    //   ["matter", "deviceid_<fabricIdHex>-<nodeIdHex>-MatterNodeDevice"]
+                    // Older/alternate formats we've seen: plain node id, or
+                    //   "<fabricIdHex>-<nodeIdHex>". Try each in order.
+                    const deviceIdRe = /^deviceid_[0-9A-Fa-f]+-([0-9A-Fa-f]+)-MatterNodeDevice$/;
+                    const fabricDashRe = /^[0-9A-Fa-f]+-([0-9A-Fa-f]+)$/;
+                    const parseNodeId = (raw) => {
+                        let m = deviceIdRe.exec(raw);
+                        if (m) return parseInt(m[1], 16);
+                        m = fabricDashRe.exec(raw);
+                        if (m) return parseInt(m[1], 16);
+                        const n = parseInt(raw, 10);
+                        return isNaN(n) ? null : n;
+                    };
                     for (const dev of msg.result) {
                         const identifiers = Array.isArray(dev.identifiers) ? dev.identifiers : [];
-                        // Matter identifiers in HA look like ["matter", "<fabric_id>-<node_id>"]
-                        // or ["matter", "<node_id>"] depending on HA version.
+                        const friendly = dev.name_by_user || dev.name || null;
+                        if (!friendly) continue;
                         for (const ident of identifiers) {
                             if (!Array.isArray(ident) || ident[0] !== 'matter') continue;
-                            const raw = String(ident[1] || '');
-                            const trailing = raw.split('-').pop();
-                            const nodeId = parseInt(trailing, 10);
-                            if (!isNaN(nodeId)) {
-                                const friendly = dev.name_by_user || dev.name || null;
-                                if (friendly) map.set(nodeId, friendly);
+                            const nodeId = parseNodeId(String(ident[1] || ''));
+                            if (nodeId !== null && !map.has(nodeId)) {
+                                map.set(nodeId, friendly);
                             }
                         }
                     }
