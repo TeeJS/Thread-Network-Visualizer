@@ -64,17 +64,41 @@ docker run -d \
 
 On first start the container seeds `/config/device_names.json` with a default. Edit that file to add your devices - the web server serves it live, so just refresh the browser to pick up changes.
 
-#### Run on Unraid
+#### Run on Unraid (tested on 7.2.4)
 
-1.  **Docker tab -> Add Container -> Template -> paste** the raw URL of `unraid-template.xml` from this repo, *or* fill in manually:
-    *   **Repository:** `ghcr.io/teejs/thread-network-visualizer:latest`
-    *   **Network Type:** `Bridge`
-    *   **WebUI:** `http://[IP]:[PORT:8080]`
-    *   **Port:** host `8080` -> container `8080` (tcp)
-    *   **Path:** host `/mnt/user/appdata/thread-network-visualizer` -> container `/config` (rw)
-2.  Apply. Unraid will pull the image, start the container, and the WebUI link on the Docker tab opens the visualizer.
-3.  Edit `/mnt/user/appdata/thread-network-visualizer/device_names.json` to add friendly names. Refresh browser.
-4.  **Updates:** Unraid's Docker tab checks GHCR for a new digest on the `:latest` tag. When you push/merge to `main`, Actions rebuilds `:latest` and Unraid shows "update ready".
+Unraid's **Add Container** form has no template-URL paste field - you either drop the template XML on the flash drive and pick it from the dropdown, or fill the form manually. Both paths end in the same running container.
+
+**Option A - drop the template on the flash drive (gets you the prefilled dropdown + reusable for reinstalls):**
+
+SSH into Unraid (or open the web terminal) and run:
+
+```bash
+wget -O /boot/config/plugins/dockerMan/templates-user/my-thread-network-visualizer.xml \
+  https://raw.githubusercontent.com/TeeJS/Thread-Network-Visualizer/main/unraid-template.xml
+```
+
+Then **Docker tab -> Add Container -> Template dropdown -> `my-thread-network-visualizer`**. All fields prefill. Click **Apply**.
+
+**Option B - fill the form manually (no SSH needed):**
+
+| Field | Value |
+|---|---|
+| Name | `Thread-Network-Visualizer` |
+| Repository | `ghcr.io/teejs/thread-network-visualizer:latest` |
+| Network Type | `Bridge` |
+
+Then click **+ Add another Path, Port, Variable, Label or Device** twice:
+
+*   Port: Name `WebUI`, Container `8080`, Host `8080`, Type `TCP`
+*   Path: Name `Config`, Container `/config`, Host `/mnt/user/appdata/thread-network-visualizer`, Access `Read/Write`
+
+Click **Apply**.
+
+**After the container is running:**
+
+*   The Docker tab's WebUI link opens the visualizer on `http://<unraid-ip>:8080`.
+*   Edit `/mnt/user/appdata/thread-network-visualizer/device_names.json` to add friendly names. Refresh browser - no container restart needed.
+*   **Updates:** Unraid's Docker tab checks GHCR for a new digest on the `:latest` tag. When you push/merge to `main`, Actions rebuilds `:latest` and Unraid shows "update ready" on the next check.
 
 #### Making the GHCR package public (one-time, after first successful build)
 
