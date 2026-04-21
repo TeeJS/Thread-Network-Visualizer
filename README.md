@@ -45,6 +45,52 @@ To avoid CORS issues and CORS configuration:
 2.  Access the visualizer via the OTBR's IP address (e.g., `http://<OTBR_IP>/index.html`).
 3.  Leave the URL field blank; it will default to the current origin.
 
+### Option 3: Docker (Unraid / any Docker host)
+
+This fork ships a **~1.5 MB** Docker image built on `busybox:musl` + busybox `httpd`. Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Container Registry on every push to `main` and on every `v*.*.*` tag.
+
+**Image:** `ghcr.io/teejs/thread-network-visualizer:latest`
+
+#### Run with `docker run`
+
+```bash
+docker run -d \
+  --name thread-network-visualizer \
+  -p 8080:8080 \
+  -v /path/to/appdata:/config \
+  --restart unless-stopped \
+  ghcr.io/teejs/thread-network-visualizer:latest
+```
+
+On first start the container seeds `/config/device_names.json` with a default. Edit that file to add your devices - the web server serves it live, so just refresh the browser to pick up changes.
+
+#### Run on Unraid
+
+1.  **Docker tab -> Add Container -> Template -> paste** the raw URL of `unraid-template.xml` from this repo, *or* fill in manually:
+    *   **Repository:** `ghcr.io/teejs/thread-network-visualizer:latest`
+    *   **Network Type:** `Bridge`
+    *   **WebUI:** `http://[IP]:[PORT:8080]`
+    *   **Port:** host `8080` -> container `8080` (tcp)
+    *   **Path:** host `/mnt/user/appdata/thread-network-visualizer` -> container `/config` (rw)
+2.  Apply. Unraid will pull the image, start the container, and the WebUI link on the Docker tab opens the visualizer.
+3.  Edit `/mnt/user/appdata/thread-network-visualizer/device_names.json` to add friendly names. Refresh browser.
+4.  **Updates:** Unraid's Docker tab checks GHCR for a new digest on the `:latest` tag. When you push/merge to `main`, Actions rebuilds `:latest` and Unraid shows "update ready".
+
+#### Making the GHCR package public (one-time, after first successful build)
+
+GHCR packages default to **private**. After the first successful Actions run:
+
+1.  Go to `https://github.com/users/TeeJS/packages/container/thread-network-visualizer/settings`.
+2.  Scroll to **Danger Zone -> Change visibility -> Public**.
+3.  Unraid can now pull without auth.
+
+#### Building locally (optional)
+
+```bash
+docker build -t thread-network-visualizer .
+docker run --rm -p 8080:8080 -v $(pwd)/appdata:/config thread-network-visualizer
+```
+
 ## How to Use
 
 ### Method A: REST API Discovery

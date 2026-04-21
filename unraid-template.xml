@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Thread-Network-Visualizer</Name>
+  <Repository>ghcr.io/teejs/thread-network-visualizer:latest</Repository>
+  <Registry>https://ghcr.io/teejs/thread-network-visualizer</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/TeeJS/Thread-Network-Visualizer/issues</Support>
+  <Project>https://github.com/TeeJS/Thread-Network-Visualizer</Project>
+  <Overview>Web UI for visualizing OpenThread mesh topology in real-time. Talks to an OpenThread Border Router (OTBR) REST API to crawl the network and draw a physics-based graph of routers and end devices.&#xD;
+&#xD;
+Mount /config to an appdata folder - device_names.json lives there so your friendly device names persist across container updates.</Overview>
+  <Category>Tools: Network:Management HomeAutomation:</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL/>
+  <Icon>https://openthread.io/static/images/ot-logo-narrow.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp" Description="Host port for the visualizer web UI" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Config (device_names.json)" Target="/config" Default="/mnt/user/appdata/thread-network-visualizer" Mode="rw" Description="Appdata folder holding device_names.json. On first start the container seeds a default; edit the file and refresh the browser to apply." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/thread-network-visualizer</Config>
+</Container>

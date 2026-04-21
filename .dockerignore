@@ -1,0 +1,8 @@
+.git
+.github
+.gitignore
+.dockerignore
+.backup
+README.md
+*.old
+unraid-template.xml

@@ -1,6 +1,6 @@
 // --- CONFIGURATION ---
 // If empty, it attempts to use the current page's origin (good for "Host It There" method)
-let API_BASE = ""; 
+let API_BASE = "http://192.168.1.25:8082"; 
 
 // --- VISUALIZATION SETUP ---
 const ROUTER_NODE_SIZE = 15;
@@ -99,22 +99,15 @@ function log(msg) {
     win.scrollTop = win.scrollHeight;
 }
 
-// --- UPDATED DISCOVERY ENGINE ---
+// --- UPDATED DISCOVERY ENGINE (uses /node + /diagnostics directly) ---
 async function startDiscovery() {
-    // Set API URL from input if provided
-    const inputUrl = document.getElementById('apiUrl').value;
-    if (inputUrl) {
-        API_BASE = inputUrl.replace(/\/$/, ""); 
-    } else if (!API_BASE) {
-        // Default to the known OTBR address if input is empty and no base set
-        API_BASE = "http://192.168.1.50:8081";
-        log(`No URL provided. Using default: ${API_BASE}`);
-    }
+    const inputUrl = (document.getElementById('apiUrl').value || '').trim();
+    API_BASE = inputUrl ? inputUrl.replace(/\/$/, "") : "http://192.168.1.25:8082";
 
     if (isScanning) return;
     isScanning = true;
     document.getElementById('btnStart').disabled = true;
-    
+
     nodes.clear();
     edges.clear();
     visitedNodes.clear();
@@ -122,202 +115,237 @@ async function startDiscovery() {
 
     log("Starting discovery...");
 
+    // Fetch device names from Matter Server WebSocket
+    const haUrl = (document.getElementById('haUrl').value || '').replace(/\/$/, '');
+    const matterHost = haUrl ? haUrl.replace(/^https?:\/\//, '').split(':')[0] : '192.168.1.25';
+    const matterWsUrl = `ws://${matterHost}:5580/ws`;
+    log("Fetching device names from Matter Server...");
     try {
-        // Step 1: Get Local Node (Border Router)
+        const matterNodes = await fetchMatterNodes(matterWsUrl);
+        let matched = 0;
+        for (const node of matterNodes) {
+            const attrs = node.attributes || {};
+            const productName = attrs['0/40/3'] || '';
+            const nodeLabel = attrs['0/40/5'] || '';
+            const name = nodeLabel || productName || `Matter Node ${node.node_id}`;
+
+            const rloc16raw = attrs['0/53/3'];
+            if (rloc16raw !== undefined && rloc16raw !== null) {
+                const rlocHex = Number(rloc16raw).toString(16).toUpperCase().padStart(4, '0');
+                deviceNames['0x' + rlocHex] = name;
+                deviceNames['0x' + rlocHex.toLowerCase()] = name;
+                matched++;
+            }
+
+            const neighbors = Array.isArray(attrs['0/53/7']) ? attrs['0/53/7'] : [];
+            neighbors.forEach(n => {
+                if (n && n[0]) {
+                    try {
+                        const extHex = BigInt(Math.round(n[0])).toString(16).toUpperCase().padStart(16, '0');
+                        deviceNames[extHex] = name;
+                    } catch(e) {}
+                }
+            });
+        }
+        log(`Loaded ${matched} Thread device name(s) from Matter Server.`);
+    } catch (e) {
+        log(`Could not reach Matter Server: ${e.message}`);
+    }
+
+    try {
+        // Step 1: Get local node info
         const selfResp = await fetch(`${API_BASE}/node`, {
             headers: { 'Accept': 'application/json' }
         });
         if (!selfResp.ok) throw new Error(`HTTP Error: ${selfResp.status}`);
-        
+
         const selfData = await selfResp.json();
-        
-        // --- FIX IS HERE: Handle Flat vs Wrapped JSON ---
-        // If 'result' exists, use it. Otherwise, use the root object.
-        const rootData = selfData.result ? selfData.result : selfData; 
-        
-        // Capture Leader ID from local node data
-        if (rootData.leaderData) {
-            currentLeaderId = rootData.leaderData.leaderRouterId;
+        const rootData = selfData.result ? selfData.result : selfData;
+
+        const leaderData = rootData.leaderData || rootData.LeaderData;
+        if (leaderData) {
+            currentLeaderId = leaderData.leaderRouterId || leaderData.LeaderRouterId;
             log(`Network Leader Router ID: ${currentLeaderId}`);
         }
 
-        const startRloc = rootData.rloc16;
-        // FIX: If rootData.extAddress is missing in /node (sometimes it is), try to fetch /api/diagnostics/ for self first
-        // But usually /node has it. If not, use 'undefined' which triggers fallback logic.
-        const startExt = rootData.extAddress; 
+        // Handle both capitalizations
+        const startRloc16 = rootData.rloc16 || rootData.Rloc16;
+        const startRloc = startRloc16 !== undefined
+            ? '0x' + startRloc16.toString(16).toUpperCase().padStart(4, '0')
+            : null;
+        const startExt = rootData.extAddress || rootData.ExtAddress;
 
         if (!startRloc) {
-                throw new Error("Could not find RLOC16 in API response. Check console.");
+            throw new Error("Could not find Rloc16 in /node response.");
         }
-        
+
         log(`Border Router found at ${startRloc} (${startExt || 'Unknown Ext'})`);
-        
-        // Add BR to map
+
+        // Step 2: Fetch all diagnostics at once from /diagnostics
+        log("Fetching network diagnostics...");
+        const diagResp = await fetch(`${API_BASE}/diagnostics`, {
+            headers: { 'Accept': 'application/json' }
+        });
+
+        if (!diagResp.ok) throw new Error(`Diagnostics HTTP Error: ${diagResp.status}`);
+
+        const diagData = await diagResp.json();
+        const diagArray = Array.isArray(diagData) ? diagData : [diagData];
+
+        log(`Received diagnostics for ${diagArray.length} node(s).`);
+
+        // Add border router first
         addNodeToGraph(startRloc, { ...rootData, extAddress: startExt }, "Border Router");
-        
-        // Start Crawl with Object containing both RLOC and ExtAddress
-        // ExtAddress is preferred for API destination
-        nodeQueue.push({ rloc: startRloc, ext: startExt });
-        processQueue();
+
+        // Build a map of Rloc16 -> diagnostic entry for quick lookup
+        const rlocMap = {};
+        diagArray.forEach(entry => {
+            const rloc = typeof entry.Rloc16 === 'number'
+                ? '0x' + entry.Rloc16.toString(16).toUpperCase().padStart(4, '0')
+                : entry.rloc16 || entry.Rloc16;
+            if (rloc) rlocMap[rloc] = entry;
+        });
+
+        // Add all nodes and edges from diagnostics
+        diagArray.forEach(entry => {
+            const rloc = typeof entry.Rloc16 === 'number'
+                ? '0x' + entry.Rloc16.toString(16).toUpperCase().padStart(4, '0')
+                : entry.rloc16 || entry.Rloc16;
+            const ext = entry.ExtAddress || entry.extAddress;
+            const ip6 = entry.IP6AddressList || entry.ipv6AddressList || [];
+
+            if (!rloc) return;
+
+            const isBR = rloc === startRloc;
+            const role = isBR ? 'Border Router' : 'Router';
+
+            addNodeToGraph(rloc, { extAddress: ext, ip6: ip6 }, role);
+
+            // Add edges from RouteData
+            if (entry.Route && entry.Route.RouteData) {
+                entry.Route.RouteData.forEach(route => {
+                    const neighborRouterId = route.RouteId;
+                    // Convert Router ID to RLOC16: routerId << 10
+                    const neighborRloc = '0x' + (neighborRouterId << 10).toString(16).toUpperCase().padStart(4, '0');
+                    const lqiIn = route.LinkQualityIn || 0;
+                    const lqiOut = route.LinkQualityOut || 0;
+                    const lqi = Math.max(lqiIn, lqiOut);
+
+                    if (lqi === 0) return; // No link
+
+                    const edgeId = [rloc, neighborRloc].sort().join('-');
+                    if (!edges.get(edgeId)) {
+                        let color = '#dc3545';
+                        if (lqi === 3) color = '#28a745';
+                        else if (lqi === 2) color = '#ffc107';
+
+                        const length = lqi === 3 ? 375 : (lqi === 2 ? 750 : 1250);
+
+                        edges.add({
+                            id: edgeId,
+                            from: rloc,
+                            to: neighborRloc,
+                            lqi: lqi,
+                            label: `LQI:${lqi}`,
+                            color: { color: color, highlight: color },
+                            width: lqi === 3 ? 3 : 1,
+                            length: length
+                        });
+                    }
+                });
+            }
+
+            // Add children from ChildTable
+            if (entry.ChildTable && Array.isArray(entry.ChildTable)) {
+                entry.ChildTable.forEach((child, idx) => {
+                    const childRloc16 = child.ChildId !== undefined
+                        ? parseInt(rloc, 16) | child.ChildId
+                        : null;
+                    const childId = childRloc16
+                        ? '0x' + childRloc16.toString(16).toUpperCase().padStart(4, '0')
+                        : `${rloc}_child_${idx}`;
+
+                    if (!nodes.get(childId)) {
+                        const isSleepy = child.Mode && !child.Mode.RxOnWhenIdle;
+                        nodes.add({
+                            id: childId,
+                            label: `Child\n${childId}`,
+                            group: 'EndDevice',
+                            color: '#6c757d',
+                            shape: isSleepy ? 'dot' : 'diamond',
+                            size: END_DEVICE_NODE_SIZE,
+                            rawData: child
+                        });
+                    }
+
+                    const edgeId = [rloc, childId].sort().join('-');
+                    if (!edges.get(edgeId)) {
+                        edges.add({
+                            id: edgeId,
+                            from: rloc,
+                            to: childId,
+                            dashes: true,
+                            color: '#aaa',
+                            width: 1,
+                            length: 125
+                        });
+                    }
+                });
+            }
+        });
+
+        log("Discovery complete.");
 
     } catch (e) {
-        console.error(e); // Log full error to browser console
+        console.error(e);
         log(`Error: ${e.message}`);
-        isScanning = false;
-        document.getElementById('btnStart').disabled = false;
     }
+
+    isScanning = false;
+    document.getElementById('btnStart').disabled = false;
 }
 
 async function processQueue() {
-    if (nodeQueue.length === 0) {
-        log("Discovery complete.");
-        isScanning = false;
-        document.getElementById('btnStart').disabled = false;
-        return;
-    }
-
-    const currentNode = nodeQueue.shift();
-    const currentRloc = currentNode.rloc;
-    const currentExt = currentNode.ext;
-    
-    // Use Extended Address for unique visitation check if available, otherwise RLOC
-    const visitKey = currentExt || currentRloc;
-
-    if (visitedNodes.has(visitKey)) {
-        processQueue();
-        return;
-    }
-    visitedNodes.add(visitKey);
-
-    log(`Probing node ${currentRloc} (${currentExt || '?'})...`);
-
-    try {
-        // Step 2: Create Async Task via /api/actions
-        // New JSON:API format: Docs example uses "data" array.
-        // Try using ExtAddress as destination, fallback to RLOC
-        const payload = {
-            data: [{
-                type: "getNetworkDiagnosticTask",
-                attributes: {
-                    destination: currentExt || currentRloc,
-                    types: ["routerNeighbors", "childTable", "rloc16", "extAddress", "ipv6Addresses"],
-                    timeout: 5
-                }
-            }]
-        };
-        
-        console.log("Sending Payload:", JSON.stringify(payload));
-        log(`Probing ${currentRloc} (Ext: ${currentExt}) with destination: ${currentExt || currentRloc}`);
-
-        const taskResp = await fetch(`${API_BASE}/api/actions`, {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/vnd.api+json',
-                'Accept': 'application/vnd.api+json'
-            },
-            body: JSON.stringify(payload)
-        });
-
-        if (!taskResp.ok) {
-            const errorText = await taskResp.text();
-            console.error("API Error Payload:", errorText); 
-            throw new Error(`Task creation failed (${taskResp.status}): ${errorText}`);
-        }
-        
-        const taskJson = await taskResp.json();
-        
-        // Extract Action ID (not the Result ID yet)
-        let actionId;
-        if (taskJson.data && Array.isArray(taskJson.data)) {
-                actionId = taskJson.data[0].id;
-        } else if (taskJson.data) {
-                actionId = taskJson.data.id;
-        }
-        
-        if (!actionId) throw new Error("Could not parse Action ID from response");
-
-        // Step 3: Poll the Action until 'completed'
-        const resultId = await pollAction(actionId);
-        
-        if (resultId) {
-            // Step 4: Fetch the final Diagnostic Report
-            const reportResp = await fetch(`${API_BASE}/api/diagnostics/${resultId}`, {
-                headers: { 'Accept': 'application/vnd.api+json' }
-            });
-            const reportJson = await reportResp.json();
-            
-            // Extract attributes from report
-            // result data usually looks like { data: [ { attributes: ... } ] } or { data: { attributes: ... } }
-            const reportData = Array.isArray(reportJson.data) ? reportJson.data[0] : reportJson.data;
-            updateGraph(reportData.attributes);
-            log(`Scanned ${currentRloc}`);
-        } else {
-            log(`Failed to get data for ${currentRloc}`);
-        }
-
-    } catch (e) {
-        log(`Error probing ${currentRloc}: ${e.message}`);
-    }
-
-    // Throttle requests slightly
-    setTimeout(processQueue, 300);
+    log("Discovery complete.");
+    isScanning = false;
+    document.getElementById('btnStart').disabled = false;
 }
 
 async function pollAction(actionId) {
-    let attempts = 0;
-    const maxAttempts = 15;
+    return null;
+}
 
-    while (attempts < maxAttempts) {
-        await new Promise(r => setTimeout(r, 1000)); // Wait 1 sec
-        
-        const statusResp = await fetch(`${API_BASE}/api/actions/${actionId}`, {
-            headers: { 'Accept': 'application/vnd.api+json' }
-        });
-        const statusJson = await statusResp.json();
-        
-        const actionData = Array.isArray(statusJson.data) ? statusJson.data[0] : statusJson.data;
-        const status = actionData.attributes.status;
-        
-        // Debug Log Status
-        console.log(`Polling ${actionId}: ${status}`, actionData);
+// --- MATTER SERVER WEBSOCKET ---
+async function fetchMatterNodes(wsUrl) {
+    return new Promise((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
 
-        if (status === 'completed') {
-            // FIX: Robustly find the result ID.
-            
-            // 1. Check standard 'result' relationship
-            const rels = actionData.relationships;
-            if (rels) {
-                if (rels.result && rels.result.data) return rels.result.data.id;
-                
-                // 2. Scan ALL relationships for something that looks like a diagnostic result
-                for (const key in rels) {
-                    const r = rels[key];
-                    if (r.data && r.data.id && (r.data.type || '').toLowerCase().includes('diagnostic')) {
-                        // console.log(`Found Result ID in relationship: ${key}`);
-                        return r.data.id;
-                    }
-                }
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.message_id === 'get_nodes' && msg.result) {
+                ws.close();
+                resolve(msg.result);
             }
+        };
 
-            // 3. Check 'included' array for diagnostic objects
-            if (statusJson.included && Array.isArray(statusJson.included)) {
-                // Find any included item with 'diagnostic' in its type
-                const diag = statusJson.included.find(i => (i.type || '').toLowerCase().includes('diagnostic'));
-                if (diag) {
-                    // console.log(`Found Result ID in included: ${diag.type}`);
-                    return diag.id;
-                }
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ message_id: 'get_nodes', command: 'get_nodes' }));
+        };
+
+        ws.onerror = () => reject(new Error('Matter Server WebSocket connection failed'));
+
+        setTimeout(() => {
+            if (ws.readyState !== WebSocket.CLOSED) {
+                ws.close();
+                reject(new Error('Matter Server timed out after 15s'));
             }
-            
-            console.error("Action completed but no Result ID found.", actionData);
-            return null;
-        }
-        if (status === 'failed' || status === 'stopped') {
-            return null;
-        }
-        attempts++;
-    }
-    return null; // Timeout
+        }, 15000);
+    });
+}
+
+// Match a Thread node's IPv6 addresses against HA Matter device connections
+function matchHADeviceByIPv6(ip6List) {
+    return null; // Now handled via Matter Server RLOC16 matching
 }
 
 function addNodeToGraph(rloc, data, role, startPos = null) {
@@ -326,8 +354,17 @@ function addNodeToGraph(rloc, data, role, startPos = null) {
     const ext = rawData.extAddress;
     
     let label = rloc;
-    if (ext && deviceNames[ext]) {
-            label = `${deviceNames[ext]}\n(${rloc})`;
+    // Try matching by RLOC16 (from Matter Server)
+    // Match by RLOC16 (exact match, case insensitive on hex digits only)
+    const rlocLower = rloc ? rloc.toLowerCase() : '';
+    const extUpper = ext ? ext.toUpperCase() : '';
+    const nameByRloc = deviceNames[rloc] || deviceNames[rlocLower] ||
+        deviceNames[rloc.replace('0x','0x').toUpperCase()] || null;
+    const nameByExt = extUpper ? (deviceNames[extUpper] || deviceNames[ext] || null) : null;
+    if (nameByRloc) {
+        label = `${nameByRloc}\n(${rloc})`;
+    } else if (nameByExt) {
+        label = `${nameByExt}\n(${rloc})`;
     }
 
     if (!nodes.get(rloc)) {
