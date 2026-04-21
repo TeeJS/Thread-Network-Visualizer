@@ -398,12 +398,19 @@ function applyMatterNames(matterDevices) {
         }
     });
 
-    // Re-render labels for any graph node that now has a name.
+    // Re-render labels. Priority: deviceNames match -> OTBR role for infra
+    // (Border Router / Leader) -> existing label. This ensures *every* node
+    // on the graph shows something human-readable, never raw hex.
     graphNodes.forEach(n => {
         const id = n.id;
         const ext = (n.rawData && n.rawData.extAddress) ? n.rawData.extAddress.toUpperCase() : null;
-        const name = deviceNames[id] || deviceNames[(id || '').toLowerCase()] ||
-                     (ext ? deviceNames[ext] : null);
+        const group = n.group || '';
+        let name = deviceNames[id] || deviceNames[(id || '').toLowerCase()] ||
+                   (ext ? deviceNames[ext] : null);
+        if (!name) {
+            if (group === 'Border Router') name = 'Border Router';
+            else if (group.startsWith('Leader')) name = group; // "Leader (Router 4)"
+        }
         if (name) {
             nodes.update({ id, label: `${name}\n(${id})` });
         }
