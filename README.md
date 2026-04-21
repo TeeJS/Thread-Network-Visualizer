@@ -144,14 +144,24 @@ If the REST API is unavailable or failing:
 ## Configuration
 
 ### Friendly Names
-Rename `device_names.json` (or create it) to map Extended MAC Addresses to readable names:
 
-```json
-{
-    "b2c9a2836317bc63": "Border Router (Pi)",
-    "f4ce368a0s......": "Living Room Sensor"
-}
-```
+Device names are populated automatically in this order of preference:
+
+1. **Home Assistant device registry** (best) - if you paste a long-lived HA access token into the UI, the visualizer reads HA's device registry over WebSocket and uses whatever you named each device in HA (`name_by_user`). Multiple Matter devices that ship with the same product name (e.g. two "BILRESA dual button") become distinguishable as soon as you rename them in HA.
+2. **Matter Server product name** - if no HA token is set, friendly names come from the python-matter-server attributes (`0/40/5` Node Label, falling back to `0/40/3` Product Name).
+3. **Override via `device_names.json`** - keys can be RLOC16 (e.g. `0xD800`) or ExtAddress (16 hex chars). Override only for nodes the Matter integration can't identify (non-Matter devices, infrastructure).
+4. **OTBR role fallback** - infrastructure always shows something readable: `Border Router`, `Leader (Router 4)`.
+
+Offline Matter-commissioned devices appear as faded, dashed "ghost" nodes attached to their last-known parent so your mesh shows every commissioned device, not just the ones awake at crawl time.
+
+### Getting a Home Assistant long-lived token
+
+1. In HA, click your profile avatar (bottom left) -> **Security** tab.
+2. Scroll to **Long-Lived Access Tokens** -> **Create Token**. Give it a name like "Thread Visualizer" and copy the shown token **immediately** - HA won't show it again.
+3. In the visualizer UI, paste the token into the **HA long-lived token** field and make sure the **HA host** field points at your HA instance (bare host or URL - port 8123 assumed). The token is stored in your browser's localStorage only; it is not sent anywhere but HA.
+4. Click **Start Crawl**. The log will show `HA device registry provided N friendly name(s).`
+
+The token has admin scope on your HA. Revoke it from the same Security tab if you stop using the visualizer.
 
 ## Troubleshooting
 *   **"Failed to get data"**: Check the browser console (F12). If you see CORS errors, see "Installation Option 2".

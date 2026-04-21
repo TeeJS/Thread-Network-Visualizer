@@ -47,6 +47,18 @@ document.getElementById('btnParseImport').addEventListener('click', parseCliInpu
 // Add listener for Link Filter
 document.getElementById('linkFilter').addEventListener('change', updateLinkVisibility);
 
+// Restore persisted inputs on load so the user doesn't retype the HA token etc.
+try {
+    const restore = (id, key) => {
+        const el = document.getElementById(id);
+        const v = localStorage.getItem(key);
+        if (el && v) el.value = v;
+    };
+    restore('apiUrl', 'tnv_otbr');
+    restore('haUrl',  'tnv_ha');
+    restore('haToken','tnv_ha_token');
+} catch (e) {}
+
 // --- STATE ---
 const visitedNodes = new Set();
 const nodeQueue = [];
@@ -127,9 +139,22 @@ async function startDiscovery() {
     // its RoutingRole (0/53/1) and its NeighborTable (0/53/7), which lists
     // the RLOC16s of its peers - for a sleepy end device this is its parent.
     let matterThreadDevices = [];
-    const haUrl = (document.getElementById('haUrl').value || '').replace(/\/$/, '');
-    const matterHost = haUrl ? haUrl.replace(/^https?:\/\//, '').split(':')[0] : '192.168.1.25';
-    const matterWsUrl = `ws://${matterHost}:5580/ws`;
+    const haUrlRaw = (document.getElementById('haUrl').value || '').trim();
+    const haToken = (document.getElementById('haToken')?.value || '').trim();
+    // Accept bare host or full URL; normalize to hostname only.
+    const haHost = (haUrlRaw.replace(/^https?:\/\//, '').split('/')[0].split(':')[0]) || '192.168.1.25';
+    const matterWsUrl = `ws://${haHost}:5580/ws`;
+    const haWsUrl = `ws://${haHost}:8123/api/websocket`;
+
+    // Persist user input so they don't retype it every session.
+    try {
+        localStorage.setItem('tnv_otbr', document.getElementById('apiUrl').value || '');
+        localStorage.setItem('tnv_ha', haUrlRaw);
+        if (haToken) localStorage.setItem('tnv_ha_token', haToken);
+    } catch (e) {}
+
+    // Fire Matter-Server and HA device-registry fetches in parallel.
+    const haNamesP = fetchHaMatterNames(haWsUrl, haToken);
     try {
         const matterNodes = await fetchMatterNodes(matterWsUrl);
         matterThreadDevices = matterNodes
@@ -149,6 +174,18 @@ async function startDiscovery() {
                     ? Number(neighbors[0]['2']) : null;
                 return { node_id: n.node_id, name, role, parentRloc16 };
             });
+        // Override Matter product names with HA's user-edited names when available.
+        const haNames = await haNamesP;
+        if (haNames && haNames.size) {
+            let overridden = 0;
+            matterThreadDevices.forEach(d => {
+                if (haNames.has(d.node_id)) {
+                    d.name = haNames.get(d.node_id);
+                    overridden++;
+                }
+            });
+            log(`HA device registry provided ${overridden} friendly name(s).`);
+        }
         if (matterThreadDevices.length) {
             log(`Matter Server has ${matterThreadDevices.length} Thread device(s); will match to mesh after crawl.`);
         }
@@ -462,6 +499,65 @@ async function processQueue() {
 
 async function pollAction(actionId) {
     return null;
+}
+
+// --- HOME ASSISTANT DEVICE REGISTRY ---
+// If the user provides a long-lived access token, pull HA's device registry
+// so we can use the user-edited friendly names (name_by_user) instead of the
+// generic Matter product names. Returns a Map<matterNodeId, friendlyName> or
+// null if the token is missing/invalid.
+async function fetchHaMatterNames(haWsUrl, token) {
+    if (!token) return null;
+    return new Promise((resolve) => {
+        const ws = new WebSocket(haWsUrl);
+        let authed = false;
+        let msgId = 1;
+        const timer = setTimeout(() => {
+            try { ws.close(); } catch (e) {}
+            resolve(null);
+        }, 15000);
+        ws.onmessage = (ev) => {
+            let msg;
+            try { msg = JSON.parse(ev.data); } catch (e) { return; }
+            if (msg.type === 'auth_required') {
+                ws.send(JSON.stringify({ type: 'auth', access_token: token }));
+            } else if (msg.type === 'auth_ok') {
+                authed = true;
+                ws.send(JSON.stringify({ id: msgId++, type: 'config/device_registry/list' }));
+            } else if (msg.type === 'auth_invalid') {
+                clearTimeout(timer);
+                log('HA token rejected - falling back to Matter Server names.');
+                ws.close();
+                resolve(null);
+            } else if (msg.type === 'result' && authed) {
+                clearTimeout(timer);
+                const map = new Map();
+                if (Array.isArray(msg.result)) {
+                    for (const dev of msg.result) {
+                        const identifiers = Array.isArray(dev.identifiers) ? dev.identifiers : [];
+                        // Matter identifiers in HA look like ["matter", "<fabric_id>-<node_id>"]
+                        // or ["matter", "<node_id>"] depending on HA version.
+                        for (const ident of identifiers) {
+                            if (!Array.isArray(ident) || ident[0] !== 'matter') continue;
+                            const raw = String(ident[1] || '');
+                            const trailing = raw.split('-').pop();
+                            const nodeId = parseInt(trailing, 10);
+                            if (!isNaN(nodeId)) {
+                                const friendly = dev.name_by_user || dev.name || null;
+                                if (friendly) map.set(nodeId, friendly);
+                            }
+                        }
+                    }
+                }
+                ws.close();
+                resolve(map);
+            }
+        };
+        ws.onerror = () => {
+            clearTimeout(timer);
+            resolve(null);
+        };
+    });
 }
 
 // --- MATTER SERVER WEBSOCKET ---

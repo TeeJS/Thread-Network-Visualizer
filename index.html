@@ -14,7 +14,8 @@
     <div id="controls">
         <button id="btnImport" style="background-color: #6610f2; color: white;">Import CLI</button>
         <input type="text" id="apiUrl" placeholder="OTBR URL" value="http://192.168.1.25:8081">
-        <input type="text" id="haUrl" placeholder="Matter Server host" value="192.168.1.25">
+        <input type="text" id="haUrl" placeholder="HA host (for Matter Server + device names)" value="192.168.1.25">
+        <input type="password" id="haToken" placeholder="HA long-lived token (optional)" value="" autocomplete="off">
         <select id="linkFilter" style="margin-left: 10px; padding: 8px;">
             <option value="0">Show All Links</option>
             <option value="2">Medium & Strong Only (LQI 2+)</option>
