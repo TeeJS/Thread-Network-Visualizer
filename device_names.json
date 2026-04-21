@@ -1,14 +1,3 @@
 {
-  "_comment": "Keys can be RLOC16 (e.g. 0xD800) or ExtAddress (16 hex chars). Ext addresses are stable across router reconfigurations; RLOC16 may shift. For routers, prefer ext. For children, OTBR does not expose ext, so match by RLOC16.",
-
-  "0xD800": "Border Router",
-  "6E4E74C42B6F7AFD": "Border Router",
-
-  "0x1000": "ALPSTUGA air quality monitor (Leader)",
-  "4EA70444E86BACCA": "ALPSTUGA air quality monitor (Leader)",
-
-  "0xD801": "Child of Border Router",
-  "0x103C": "Child of ALPSTUGA",
-
-  "b2c9a2836317bc63": "Border Router"
+  "_comment": "Device names auto-populate from a python-matter-server (ws://<host>:5580/ws) via structural matching after the OTBR crawl - you normally do not need to edit this file. Override here only for nodes the matcher cannot identify (e.g. non-Matter devices). Keys are RLOC16 (e.g. '0xD800') or ExtAddress (16 hex chars)."
 }
