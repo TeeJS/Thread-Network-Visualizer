@@ -15,7 +15,7 @@ Mount /config to an appdata folder - device_names.json lives there so your frien
   <Category>Tools: Network:Management HomeAutomation:</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
   <TemplateURL/>
-  <Icon>https://openthread.io/static/images/ot-logo-narrow.png</Icon>
+  <Icon>https://raw.githubusercontent.com/TeeJS/Thread-Network-Visualizer/main/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
