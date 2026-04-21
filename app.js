@@ -115,29 +115,42 @@ async function startDiscovery() {
 
     log("Starting discovery...");
 
-    // Optionally surface info about Thread devices known to a python-matter-server.
-    // NOTE: we intentionally do NOT auto-populate deviceNames from Matter here.
-    // The Thread Network Diagnostics cluster (id 53) does not expose a node's
-    // own RLOC16 or ExtAddress, and JSON-parsing of uint64 neighbor-table ext
-    // addresses loses precision in JS (last 2 bytes corrupted), so naive
-    // mapping produced wrong labels. Authoritative names live in device_names.json.
+    // Fetch Matter Server Thread-device metadata up front. We do NOT apply names
+    // here - we cache the list and structurally match it to the OTBR crawl
+    // result after discovery completes (see applyMatterNames below).
+    //
+    // Why structural match instead of direct field lookup: the Matter Thread
+    // Network Diagnostics cluster (id 53) does not expose a node's own RLOC16
+    // or ExtAddress. Attr 0/53/3 is PanId. Ext addresses in NeighborTable
+    // entries are uint64 and lose precision through JSON.parse in JS. The
+    // only reliable signal each Matter Thread device exposes about itself is
+    // its RoutingRole (0/53/1) and its NeighborTable (0/53/7), which lists
+    // the RLOC16s of its peers - for a sleepy end device this is its parent.
+    let matterThreadDevices = [];
     const haUrl = (document.getElementById('haUrl').value || '').replace(/\/$/, '');
     const matterHost = haUrl ? haUrl.replace(/^https?:\/\//, '').split(':')[0] : '192.168.1.25';
     const matterWsUrl = `ws://${matterHost}:5580/ws`;
     try {
         const matterNodes = await fetchMatterNodes(matterWsUrl);
-        const threadNodes = matterNodes.filter(n => {
-            const a = n.attributes || {};
-            const hasRoutingRole = a['0/53/1'] !== undefined && a['0/53/1'] !== null
-                && typeof a['0/53/1'] !== 'object';
-            return hasRoutingRole;
-        });
-        const names = threadNodes.map(n => {
-            const a = n.attributes || {};
-            return a['0/40/5'] || a['0/40/3'] || `Matter Node ${n.node_id}`;
-        });
-        if (threadNodes.length) {
-            log(`Matter Server has ${threadNodes.length} Thread device(s): ${names.join(', ')}. Edit device_names.json to label them.`);
+        matterThreadDevices = matterNodes
+            .filter(n => {
+                const a = n.attributes || {};
+                const rr = a['0/53/1'];
+                return rr !== undefined && rr !== null && typeof rr !== 'object';
+            })
+            .map(n => {
+                const a = n.attributes || {};
+                const name = a['0/40/5'] || a['0/40/3'] || `Matter Node ${n.node_id}`;
+                const role = a['0/53/1']; // 2=SED, 3=ED, 4=REED, 5=Router, 6=Leader
+                // First neighbor entry's RLOC16 (index "2" per Matter spec); for
+                // an end device this is its attachment/parent router's RLOC16.
+                const neighbors = Array.isArray(a['0/53/7']) ? a['0/53/7'] : [];
+                const parentRloc16 = neighbors.length && neighbors[0]['2'] !== undefined
+                    ? Number(neighbors[0]['2']) : null;
+                return { node_id: n.node_id, name, role, parentRloc16 };
+            });
+        if (matterThreadDevices.length) {
+            log(`Matter Server has ${matterThreadDevices.length} Thread device(s); will match to mesh after crawl.`);
         }
     } catch (e) {
         // Matter Server is optional - continue silently
@@ -289,6 +302,10 @@ async function startDiscovery() {
             }
         });
 
+        if (matterThreadDevices.length) {
+            applyMatterNames(matterThreadDevices);
+        }
+
         log("Discovery complete.");
 
     } catch (e) {
@@ -298,6 +315,101 @@ async function startDiscovery() {
 
     isScanning = false;
     document.getElementById('btnStart').disabled = false;
+}
+
+// Structural cross-reference of Matter's Thread-device metadata against the
+// OTBR mesh we just crawled. Strategy:
+//   1. Matter's sole Leader (RoutingRole=6) -> OTBR's Leader (unique match).
+//   2. Matter's end devices (RoutingRole=2/3) each report a parent RLOC16
+//      (first neighbor). Group both sides by parent and match one-to-one;
+//      when counts differ, label all OTBR children under that parent with
+//      the joined candidate names so the user at least sees something.
+// Names are written through deviceNames so existing lookup paths work, then
+// existing node labels on the graph are updated in place.
+function applyMatterNames(matterDevices) {
+    const graphNodes = nodes.get();
+    let matches = 0;
+
+    const rolEnum = { SED: 2, ED: 3, REED: 4, ROUTER: 5, LEADER: 6 };
+
+    // 1) Leader match
+    const otbrLeader = graphNodes.find(n => (n.group || '').startsWith('Leader'));
+    const matterLeader = matterDevices.find(m => m.role === rolEnum.LEADER);
+    if (otbrLeader && matterLeader) {
+        deviceNames[otbrLeader.id] = matterLeader.name;
+        deviceNames[otbrLeader.id.toLowerCase()] = matterLeader.name;
+        const ext = otbrLeader.rawData && otbrLeader.rawData.extAddress;
+        if (ext) {
+            deviceNames[ext.toUpperCase()] = matterLeader.name;
+            deviceNames[ext] = matterLeader.name;
+        }
+        matches++;
+    }
+
+    // 2) Non-leader routers: match by position in OTBR router list, excluding leader.
+    //    Only attempt if counts match (otherwise too ambiguous).
+    const otbrNonLeaderRouters = graphNodes.filter(n => {
+        const g = n.group || '';
+        return (g === 'Border Router' || g === 'Router') && !g.startsWith('Leader');
+    });
+    const matterRouters = matterDevices.filter(m => m.role === rolEnum.ROUTER);
+    if (otbrNonLeaderRouters.length === matterRouters.length && otbrNonLeaderRouters.length > 0) {
+        otbrNonLeaderRouters.forEach((n, i) => {
+            const name = matterRouters[i].name;
+            deviceNames[n.id] = name;
+            const ext = n.rawData && n.rawData.extAddress;
+            if (ext) deviceNames[ext.toUpperCase()] = name;
+            matches++;
+        });
+    }
+
+    // 3) Children: group by parent router RLOC16 and match within each group.
+    const otbrChildrenByParent = {};
+    edges.get().forEach(e => {
+        if (e.dashes) {
+            (otbrChildrenByParent[e.from] ||= []).push(e.to);
+        }
+    });
+    const matterChildrenByParent = {};
+    matterDevices
+        .filter(m => (m.role === rolEnum.SED || m.role === rolEnum.ED) && m.parentRloc16 !== null)
+        .forEach(m => {
+            const parentKey = '0x' + m.parentRloc16.toString(16).toUpperCase().padStart(4, '0');
+            (matterChildrenByParent[parentKey] ||= []).push(m);
+        });
+
+    Object.entries(otbrChildrenByParent).forEach(([parent, childIds]) => {
+        const candidates = matterChildrenByParent[parent] || [];
+        if (!candidates.length) return;
+        if (candidates.length === childIds.length) {
+            // Unambiguous 1:1 (still arbitrary ordering, but best we can do).
+            childIds.forEach((id, i) => {
+                deviceNames[id] = candidates[i].name;
+                matches++;
+            });
+        } else {
+            // Counts differ - fall back to joined candidate names on every child
+            // under this parent, so user at least sees plausible names.
+            const joined = [...new Set(candidates.map(c => c.name))].join(' / ');
+            childIds.forEach(id => {
+                deviceNames[id] = joined;
+                matches++;
+            });
+        }
+    });
+
+    // Re-render labels for any graph node that now has a name.
+    graphNodes.forEach(n => {
+        const id = n.id;
+        const ext = (n.rawData && n.rawData.extAddress) ? n.rawData.extAddress.toUpperCase() : null;
+        const name = deviceNames[id] || deviceNames[(id || '').toLowerCase()] ||
+                     (ext ? deviceNames[ext] : null);
+        if (name) {
+            nodes.update({ id, label: `${name}\n(${id})` });
+        }
+    });
+
+    if (matches) log(`Applied ${matches} Matter name(s) via structural match.`);
 }
 
 async function processQueue() {
